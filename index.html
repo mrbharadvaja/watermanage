@@ -88,13 +88,12 @@
 
         const shortDate = (dateStr) => {
             const d = new Date(dateStr);
-            if (isNaN(d.getTime())) return dateStr; // Fallback if it's an old string format like "20 Mar"
+            if (isNaN(d.getTime())) return dateStr; 
             return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
         };
 
         // --- Gemini API Logic ---
         const callGemini = async (prompt, retries = 0) => {
-            // Note: In local environments, you need to replace this empty string with your actual Gemini API Key
             const apiKey = ""; 
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
             const payload = {
@@ -138,13 +137,13 @@
 
         // --- Default Data Reference ---
         const defaultDailyUseData = [
-            { id: 'd1', date: '2026-03-20', val: 180 }, { id: 'd2', date: '2026-03-21', val: 180 },
-            { id: 'd3', date: '2026-03-22', val: 180 }, { id: 'd4', date: '2026-03-23', val: 180 },
-            { id: 'd5', date: '2026-03-24', val: 180 }, { id: 'd6', date: '2026-03-25', val: 180 },
-            { id: 'd7', date: '2026-03-26', val: 180 }, { id: 'd8', date: '2026-03-27', val: 180 },
-            { id: 'd9', date: '2026-03-28', val: 147 }, { id: 'd10', date: '2026-03-29', val: 208 }
+            { id: 'd1', date: '2026-03-29', val: 234 },
+            { id: 'd2', date: '2026-03-30', val: 113 },
+            { id: 'd3', date: '2026-03-31', val: 428 },
+            { id: 'd4', date: '2026-04-01', val: 283 },
+            { id: 'd5', date: '2026-04-02', val: 90 },
         ];
-        const LOCAL_STORAGE_KEY = 'bp_water_dashboard_data';
+        const LOCAL_STORAGE_KEY = 'bp_water_dashboard_data_v2';
 
         // --- App Component ---
         function App() {
@@ -154,11 +153,11 @@
             // Firebase Setup
             const [db, setDb] = useState(null);
             const [user, setUser] = useState(null);
-            const [saveStatus, setSaveStatus] = useState("idle"); // idle, saving, saved, error
+            const [saveStatus, setSaveStatus] = useState("idle");
 
             // Setup Base State
             const [baseDateStr] = useState('2026-03-29');
-            const [selectedDateStr, setSelectedDateStr] = useState('2026-03-29');
+            const [selectedDateStr, setSelectedDateStr] = useState('2026-04-02');
             
             // Editable Operations Parameters
             const [baseStock, setBaseStock] = useState(3725);
@@ -166,7 +165,7 @@
             const [dailyConsumption, setDailyConsumption] = useState(213); 
             
             const [shipments, setShipments] = useState([
-                { id: 1, date: '2026-03-31', volume: 3198 }, 
+                { id: 1, date: '2026-03-30', volume: 3000 }, 
                 { id: 2, date: '2026-04-07', volume: 7800 }, 
                 { id: 3, date: '2026-04-08', volume: 10800 }, 
             ]);
@@ -179,7 +178,6 @@
 
             // --- Load Data & Firebase Initialization ---
             useEffect(() => {
-                // 1. Load from LocalStorage first (Works instantly for GitHub Pages / Local HTML)
                 const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
                 if (localData) {
                     try {
@@ -194,7 +192,6 @@
                     }
                 }
 
-                // 2. Initialize Firebase (if available) to sync to cloud
                 let unsubscribeAuth;
                 let unsubscribeData;
 
@@ -220,7 +217,6 @@
                             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                             const docRef = doc(firestoreDb, 'artifacts', appId, 'users', currentUser.uid, 'settings', 'dashboardConfig');
                             
-                            // Listen to cloud changes (Cloud overrides local if it updates)
                             unsubscribeData = onSnapshot(docRef, (docSnap) => {
                                 if (docSnap.exists()) {
                                     const data = docSnap.data();
@@ -256,21 +252,18 @@
                     lastUpdated: new Date().toISOString()
                 };
 
-                // Always save to Browser Local Storage (Works on GitHub Pages & Local HTML)
                 try {
                     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
                 } catch (e) {
                     console.error("Failed to save to local storage", e);
                 }
 
-                // If local environment, we are done saving!
                 if (isLocalEnvironment || !user || !db) {
                     setSaveStatus("saved");
                     setTimeout(() => setSaveStatus("idle"), 3000);
                     return;
                 }
                 
-                // If Cloud is available, save there too
                 try {
                     const { doc, setDoc } = window.firebaseAPI;
                     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -281,7 +274,6 @@
                     setTimeout(() => setSaveStatus("idle"), 3000);
                 } catch (error) {
                     console.error("Error saving doc", error);
-                    // Even if cloud fails, it saved locally, so we show success
                     setSaveStatus("saved");
                     setTimeout(() => setSaveStatus("idle"), 3000);
                 }
@@ -306,40 +298,48 @@
                 else setScenario('Custom');
             };
 
-            // --- Core Engine: Calculate Forecast Array (Strictly Standard Based) ---
+            // --- Core Engine: Blend Actuals and Forecast Standards ---
             const forecastData = useMemo(() => {
                 let currentStock = parseInt(baseStock) || 0;
                 let data = [];
                 let runningDate = new Date(baseDateStr);
-                const consumption = parseInt(dailyConsumption) || 0;
+                const stdConsumption = parseInt(dailyConsumption) || 0;
 
-                // Simulate for 60 days
                 for (let i = 0; i <= 60; i++) {
                     let dStr = formatDate(runningDate);
                     
-                    // Add any incoming shipments for this day
+                    // Add Incoming Shipments
                     let shipmentVol = shipments.filter(s => s.date === dStr).reduce((acc, s) => acc + (parseInt(s.volume)||0), 0);
                     currentStock += shipmentVol;
                     
-                    // Calculate days cover
-                    const cover = consumption > 0 ? (currentStock / consumption) : 0;
+                    // Check if we have actual data for this day, otherwise use Standard
+                    let actualObj = actualDailyUseDataState.find(a => a.date === dStr);
+                    let appliedConsumption = stdConsumption;
+                    
+                    if (actualObj && actualObj.val !== null && actualObj.val !== '') {
+                        appliedConsumption = parseInt(actualObj.val);
+                    }
+
+                    // Subtract consumption to get END of day stock
+                    currentStock -= appliedConsumption;
+                    
+                    const cover = stdConsumption > 0 ? (currentStock / stdConsumption) : 0;
 
                     data.push({
                         dateObj: new Date(runningDate),
                         dateStr: dStr,
                         label: shortDate(dStr),
-                        stock: currentStock,
-                        consumption: i > 0 ? consumption : 0, 
+                        stock: currentStock, // Ending Stock
+                        consumption: appliedConsumption,
+                        isActual: !!actualObj,
                         shipment: shipmentVol,
                         daysCover: cover
                     });
 
-                    // Daily consumption occurs at end of day for next day
-                    currentStock -= consumption;
                     runningDate.setDate(runningDate.getDate() + 1);
                 }
                 return data;
-            }, [baseDateStr, baseStock, dailyConsumption, shipments]);
+            }, [baseDateStr, baseStock, dailyConsumption, shipments, actualDailyUseDataState]);
 
             // --- Derived State for Currently Selected Date ---
             const currentDayState = useMemo(() => {
@@ -369,7 +369,7 @@
 
             const handleActualUsageChange = (index, value) => {
                 const newData = [...actualDailyUseDataState];
-                newData[index].val = parseInt(value) || 0;
+                newData[index].val = value;
                 setActualDailyUseData(newData);
             };
 
@@ -389,7 +389,7 @@
                 setActualDailyUseData(newData);
             };
 
-            // Calculate BP Risk Colors (Green > 60, Yellow 45-60, Red < 45)
+            // Calculate BP Risk Colors
             const getRiskLevel = (days) => {
                 if (days > 60) return { text: 'text-green-600', bg: 'bg-green-100', border: 'border-green-500', hex: '#16a34a', label: 'Healthy' };
                 if (days >= 45) return { text: 'text-yellow-600', bg: 'bg-yellow-100', border: 'border-yellow-500', hex: '#ca8a04', label: 'Warning' };
@@ -399,7 +399,7 @@
             const currentDaysCoverSafe = isNaN(currentDayState?.daysCover) ? 0 : currentDayState.daysCover;
             const currentRisk = getRiskLevel(currentDaysCoverSafe);
 
-            // Calculate Timeline Stages dynamically based on shipments
+            // Calculate Timeline Stages dynamically
             const timelineStages = useMemo(() => {
                 let stages = [];
                 let sortedShipments = [...shipments].sort((a,b) => new Date(a.date) - new Date(b.date));
@@ -409,25 +409,33 @@
                     if (!shipmentDayData) return;
 
                     let prevDateStr = index === 0 ? baseDateStr : sortedShipments[index-1].date;
-                    let prevDateObj = new Date(prevDateStr);
                     let currDateObj = new Date(shipment.date);
-                    let gapDays = Math.round((currDateObj - prevDateObj) / (1000 * 60 * 60 * 24));
                     
-                    let stockBefore = shipmentDayData.stock - shipment.volume;
+                    let consumedPeriod = 0;
+                    let d = new Date(prevDateStr);
+                    // Accurately sum the consumption (actual or forecast) between the shipments
+                    while(d < currDateObj) {
+                        let fd = forecastData.find(x => x.dateStr === formatDate(d));
+                        if(fd) consumedPeriod += fd.consumption;
+                        d.setDate(d.getDate() + 1);
+                    }
+                    
+                    let gapDays = Math.round((new Date(shipment.date) - new Date(prevDateStr)) / (1000 * 60 * 60 * 24));
+                    let stockBefore = shipmentDayData.stock - shipment.volume; // Because shipmentDayData.stock already has shipment added
                     
                     stages.push({
                         id: index + 1,
                         date: shipment.date,
                         volume: shipment.volume,
                         gapDays: gapDays,
-                        consumedPeriod: gapDays * dailyConsumption,
+                        consumedPeriod: consumedPeriod,
                         stockBefore: stockBefore,
                         stockAfter: shipmentDayData.stock,
                         newDaysCover: shipmentDayData.daysCover
                     });
                 });
                 return stages;
-            }, [shipments, forecastData, baseDateStr, dailyConsumption]);
+            }, [shipments, forecastData, baseDateStr]);
 
             // --- AI Generation Handler ---
             const handleGenerateAI = async () => {
@@ -543,13 +551,13 @@
                             <div className="bg-white rounded-lg p-5 border-t-4 border-t-cyan-500 shadow-sm">
                                 <div className="flex justify-between items-start">
                                     <div>
-                                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Standard Daily Cons.</p>
-                                        <h3 className="text-3xl font-black text-slate-800 mt-1">{dailyConsumption} <span className="text-sm font-semibold text-slate-500">Galons/Day</span></h3>
+                                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Applied Daily Cons.</p>
+                                        <h3 className="text-3xl font-black text-slate-800 mt-1">{currentDayState.consumption} <span className="text-sm font-semibold text-slate-500">Galons</span></h3>
                                     </div>
                                     <div className="bg-cyan-50 p-3 rounded-lg"><IconDroplet className="w-6 h-6 text-cyan-600" /></div>
                                 </div>
                                 <p className="text-xs text-slate-500 mt-3 font-medium">
-                                    {scenario === 'Custom' ? 'Based on custom manual rate' : `Based on 1750 POB * ${scenario} / 19L`}
+                                    {currentDayState.isActual ? <span className="text-emerald-600 font-bold">Using Actual Input</span> : 'Using Standard Forecast'}
                                 </p>
                             </div>
 
@@ -681,11 +689,11 @@
                             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                 <div className="bg-slate-50 border-b border-slate-200 px-5 py-3 flex justify-between items-center">
                                     <span className="font-bold text-slate-700 uppercase text-sm tracking-wider">Actual Daily Consumption</span>
-                                    <span className="text-xs bg-slate-200 text-slate-600 font-bold px-2 py-1 rounded">Reference Only</span>
+                                    <span className="text-xs bg-slate-200 text-slate-600 font-bold px-2 py-1 rounded">Reference Data</span>
                                 </div>
                                 <div className="p-6 h-80 w-full relative">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={actualDailyUseDataState} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
+                                        <BarChart data={actualDailyUseDataState.filter(d => d.val !== null && d.val !== '')} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                                             <XAxis dataKey="date" tickFormatter={shortDate} tick={{fill: '#64748b', fontSize: 11}} />
                                             <YAxis tick={{fill: '#64748b', fontSize: 11}} />
@@ -696,7 +704,6 @@
                                                 labelFormatter={shortDate}
                                             />
                                             <Bar dataKey="val" name="Galons Issued" fill="#94a3b8" radius={[4, 4, 0, 0]}>
-                                                {/* Labels always visible as requested */}
                                                 <LabelList dataKey="val" position="top" style={{ fill: '#64748b', fontSize: 11, fontWeight: 'bold' }} />
                                             </Bar>
                                         </BarChart>
@@ -708,7 +715,7 @@
                             <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                 <div className="bg-slate-50 border-b border-slate-200 px-5 py-3 flex justify-between items-center">
                                     <span className="font-bold text-slate-700 uppercase text-sm tracking-wider">Stock Depletion Forecast</span>
-                                    <span className="text-xs bg-indigo-100 text-indigo-700 font-bold px-2 py-1 rounded">Based on {dailyConsumption} Galons/day</span>
+                                    <span className="text-xs bg-indigo-100 text-indigo-700 font-bold px-2 py-1 rounded">Blended Logic (Act + Std)</span>
                                 </div>
                                 <div className="p-6 h-80 w-full relative">
                                     <ResponsiveContainer width="100%" height="100%">
@@ -720,14 +727,13 @@
                                             <Tooltip 
                                                 contentStyle={{ backgroundColor: '#1e293b', borderRadius: '8px', border: 'none', color: '#fff' }}
                                                 labelStyle={{ color: '#94a3b8', fontWeight: 'bold', marginBottom: '4px' }}
-                                                formatter={(value, name) => [value, name === 'stock' ? 'Stock (Galons)' : 'Incoming Shipment']}
+                                                formatter={(value, name) => [value, name === 'stock' ? 'End Stock (Galons)' : 'Incoming Shipment']}
                                             />
                                             
                                             <ReferenceLine yAxisId="left" x={shortDate(selectedDateStr)} stroke="#f59e0b" strokeWidth={2} strokeDasharray="3 3" label={{ position: 'top', value: 'Simulator Date', fill: '#f59e0b', fontSize: 11, fontWeight: 'bold' }} />
                                             
                                             <Area yAxisId="left" type="monotone" dataKey="stock" name="Projected Stock" stroke="#1f4e79" strokeWidth={3} fillOpacity={0.1} fill="#1f4e79" />
                                             <Bar yAxisId="right" dataKey="shipment" name="Shipment Arrival" fill="#10b981" barSize={15}>
-                                                {/* Labels always visible as requested */}
                                                 <LabelList dataKey="shipment" position="top" formatter={(val) => val > 0 ? `+${val}` : ''} style={{ fill: '#059669', fontSize: 10, fontWeight: 'bold' }} />
                                             </Bar>
                                         </ComposedChart>
